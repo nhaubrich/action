@@ -11,12 +11,12 @@ class NeuralNetwork(nn.Module):
         #self.tf=tf
         #self.q0=q0
         #self.qdot0=qdot0
-        N = 4
+        N = 64
         self.stack = nn.Sequential(
                 nn.Linear(1,N),
-                nn.ReLU(),
+                nn.Sigmoid(),
                 nn.Linear(N,N),
-                nn.ReLU(),
+                nn.Sigmoid(),
                 nn.Linear(N,N),
                 nn.ReLU(),
                 nn.Linear(N,1,)
@@ -31,26 +31,21 @@ NN = NeuralNetwork()
 
 
 t0=0
-tf=10
+tf=1
 q0=0
-qdot0=-0.1
+qdot0=0
+m=2
+g=10
 
 timesteps=torch.tensor([t0,tf],dtype=torch.float,requires_grad=True)
 f = timesteps**2
 #f.backward(gradient=torch.tensor([1.0,1.0])
 
-#zero = torch.zeros(1)
-#zero.requires_grad = True
-#NNq0 = NN(zero)
-#NNq0.backward(gradient=torch.ones(1))
-#NNqdot0 = zero.grad
 
 #action
 
 
-def Lagrangian(q,qdot):
-    m=20
-    g=10
+def Lagrangian(q,qdot,m,g):
     return 1/2*m*qdot**2 - m*g*q
 
 timesteps = torch.linspace(t0,tf,steps=11).reshape(-1,1)
@@ -66,8 +61,7 @@ NNqdot0 = NNqdot[0]
 q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
 qdot = NNqdot-NNqdot0+qdot0
 
-
-action = Lagrangian(q,qdot).sum()
+action = Lagrangian(q,qdot,m,g).sum()
 print("q0 {}, qdot0 {}".format(q[0],qdot[0]))
 
 
@@ -75,10 +69,20 @@ print("q0 {}, qdot0 {}".format(q[0],qdot[0]))
 #1. generate points
 #2. compute action
 #3. backprop
-optimizer = torch.optim.Adam(NN.parameters(),lr=1e-5)
+optimizer = torch.optim.Adam(NN.parameters(),lr=1e-4)
 losses = []
-for i in range(1000):
-    NN.train()
+epochs=1000
+
+paths_t = []
+paths_q = []
+paths_qdot = []
+paths_L = []
+paths_NNq = []
+paths_NNqdot = []
+
+NN.train()
+for i in range(epochs):
+    #pdb.set_trace()
     #timesteps = torch.linspace(t0,tf,steps=1023).reshape(-1,1)
     
     timesteps = torch.cat([torch.tensor(t0,dtype=torch.float).reshape(-1,1),
@@ -94,18 +98,35 @@ for i in range(1000):
 
     q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
     qdot = NNqdot-NNqdot0+qdot0
-
-    action = Lagrangian(q,qdot).sum()
+    
+    L = Lagrangian(q,qdot,m,g)
+    action = L.mean()
     #print("q0 {}, qdot0 {}".format(q[0],qdot[0]))
-    loss = action
+    loss = action #+ 100* ( (q[0]-q0)**2 + (qdot[0]-qdot0)**2 )
     loss.backward()
     optimizer.step()
-    print(q)
+    #print(q)
     optimizer.zero_grad()
     #print("zero opt")
     #print(qdot)
     print("{:.2f}".format(loss.item()))
     losses.append(loss.item())
+
+    if i%(epochs//10)==0 or i+1==epochs:
+        saved_t = timesteps.T.tolist()[0]
+        saved_q = q.T.tolist()[0]
+        saved_qdot = qdot.T.tolist()[0]
+        saved_L = L.T.tolist()[0]
+        saved_NNq = NNq.T.tolist()[0]
+        saved_NNqdot = NNq.T.tolist()[0]
+
+        saved_t,saved_q,saved_qdot,saved_L,saved_NNq,saved_NNqdot = zip(*sorted(zip(saved_t,saved_q,saved_qdot,saved_L,saved_NNq,saved_NNqdot)))
+        paths_t.append(saved_t)
+        paths_q.append(saved_q)
+        paths_qdot.append(saved_qdot)
+        paths_L.append(saved_L)
+        paths_NNq.append(saved_NNq)
+        paths_NNqdot.append(saved_NNqdot)
 
 #eval
 
@@ -122,23 +143,53 @@ NNqdot0 = NNqdot[0]
 
 q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
 qdot = NNqdot-NNqdot0+qdot0
+#q = NNq
+#qdot = NNqdot
 
-L = Lagrangian(q,qdot)
-action = L.sum()
+
+L = Lagrangian(q,qdot,m,g)
+action = L.mean()
 #print("q0 {}, qdot0 {}".format(q[0],qdot[0]))
 
-t = timesteps.detach().numpy()
+ts = timesteps.detach().numpy()
 pos = q.detach().numpy()
 vel = qdot.detach().numpy()
 
-fig, axs = plt.subplots(4)
-axs[0].set_title("position")
-axs[1].set_title("velocity")
-axs[2].set_title("instant action")
-axs[3].set_title("training loss")
-axs[0].plot(t,pos)
-axs[1].plot(t,vel)
-axs[2].plot(t,L.detach().numpy())
-axs[3].plot(losses)
+fig, axs = plt.subplots(2,3)
+axs[0,0].set_title("position")
+axs[0,1].set_title("velocity")
+axs[0,2].set_title("instant action")
+#axs[0,0].plot(t,pos,color="blue")
+#axs[0,1].plot(t,vel)
+#axs[0,2].plot(t,L.detach().numpy())
+
+for i,(t,path) in enumerate(zip(paths_t,paths_q)):
+    axs[0,0].plot(t,path,color="blue",alpha=i*1/len(paths_t))
+
+axs[0,0].plot(ts,-0.5*g*ts**2+qdot0*ts+q0,color="black",linestyle="--")
+
+
+for i,(t,path) in enumerate(zip(paths_t,paths_qdot)):
+    axs[0,1].plot(t,path,color="green",alpha=i*1/len(paths_t))
+axs[0,1].plot(ts,-g*ts+qdot0,color="black",linestyle="--")
+
+for i,(t,path) in enumerate(zip(paths_t,paths_L)):
+    axs[0,2].plot(t,path,color="red",alpha=i*1/len(paths_t))
+
+axs[0,2].plot(ts,m*g**2*ts**2+m*qdot0**2/2,color="black",linestyle="--")#wrong if q0 or qdot0!=0
+
+axs[1,0].set_title("NN q")
+axs[1,1].set_title("NN qdot")
+axs[1,2].set_title("training loss")
+
+for i,(t,path) in enumerate(zip(paths_t,paths_NNq)):
+    axs[1,0].plot(t,path,color="purple",alpha=i*1/len(paths_t))
+
+for i,(t,path) in enumerate(zip(paths_t,paths_NNq)):
+    axs[1,1].plot(t,path,color="orange",alpha=i*1/len(paths_t))
+
+#axs[1,0].plot(t,NNq.detach().numpy())
+#axs[1,1].plot(t,NNqdot.detach().numpy())
+axs[1,2].plot(losses)
 fig.tight_layout()
 plt.show()
