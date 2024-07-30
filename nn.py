@@ -3,6 +3,13 @@ from torch import nn
 
 #torch.manual_seed(0)
 import matplotlib.pyplot as plt
+import pdb
+
+class IReLU(nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self,x):
+        return (x>0)*0.5*x**2
 
 class NeuralNetwork(nn.Module):
     def __init__(self):#,t0,tf,q0,qdot0):
@@ -11,7 +18,7 @@ class NeuralNetwork(nn.Module):
         #self.tf=tf
         #self.q0=q0
         #self.qdot0=qdot0
-        N = 16
+        N = 64
         self.stack = nn.Sequential(
                 nn.Linear(1,N),
                 nn.ReLU(),
@@ -29,9 +36,11 @@ NN = NeuralNetwork()
 
 
 t0=0
-tf=1
+tf=5
 q0=0
-qdot0=0
+qf=-8
+
+#qdot0=0
 m=2
 g=10
 
@@ -48,12 +57,14 @@ NNqdot = timesteps.grad
 #enforce I.C.
 NNq0 = NNq[0]
 NNqdot0 = NNqdot[0]
+NNqf = NNq[-1]
+#q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
+#qdot = NNqdot-NNqdot0+qdot0
+q = (NNq-NNq0)*(qf-q0)/(NNqf-NNq0)+q0
+qdot = NNqdot*(qf-q0)/(NNqf-NNq0)
 
-q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
-qdot = NNqdot-NNqdot0+qdot0
 
-print("q0 {}, qdot0 {}".format(q[0],qdot[0]))
-
+print("q0 {}, qf {}".format(q[0],q[-1]))
 
 #training loop
 #1. generate points
@@ -69,7 +80,7 @@ paths_L = []
 paths_NNq = []
 paths_NNqdot = []
 
-epochs=2000
+epochs=800
 Npoints=2**8
 NN.train()
 for i in range(epochs):
@@ -77,7 +88,8 @@ for i in range(epochs):
     #timesteps = torch.linspace(t0,tf,steps=1023).reshape(-1,1)
     
     timesteps = torch.cat([torch.tensor(t0,dtype=torch.float).reshape(-1,1),
-        torch.FloatTensor(Npoints-1,1).uniform_(t0,tf)])
+        torch.FloatTensor(Npoints-2,1).uniform_(t0,tf),
+        torch.tensor(tf,dtype=torch.float).reshape(-1,1)])
     timesteps.requires_grad = True
     
     NNq = NN(timesteps)
@@ -85,11 +97,14 @@ for i in range(epochs):
     NNqdot = timesteps.grad
 
     NNq0 = NNq[0]
-    NNqdot0 = NNqdot[0]
+    NNqf = NNq[-1]
+    #NNqdot0 = NNqdot[0]
     optimizer.zero_grad()
 
-    q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
-    qdot = NNqdot-NNqdot0+qdot0
+    q = (NNq-NNq0)*(qf-q0)/(NNqf-NNq0)+q0
+    qdot = NNqdot*(qf-q0)/(NNqf-NNq0)
+    #q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
+    #qdot = NNqdot-NNqdot0+qdot0
     
     L = Lagrangian(q,qdot,m,g)
     action = L.mean()/(tf-t0)
@@ -131,10 +146,13 @@ NN(timesteps).backward(gradient=torch.ones(timesteps.shape))
 NNqdot = timesteps.grad
 
 NNq0 = NNq[0]
-NNqdot0 = NNqdot[0]
+NNqf = NNq[-1]
+#NNqdot0 = NNqdot[0]
 
-q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
-qdot = NNqdot-NNqdot0+qdot0
+#q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
+#qdot = NNqdot-NNqdot0+qdot0
+q = (NNq-NNq0)*(qf-q0)/(NNqf-NNq0)+q0
+qdot = NNqdot*(qf-q0)/(NNqf-NNq0)
 
 
 L = Lagrangian(q,qdot,m,g)
@@ -150,21 +168,21 @@ fig, axs = plt.subplots(2,3)
 axs[0,0].set_title("position")
 for i,(t,path) in enumerate(zip(paths_t,paths_q)):
     axs[0,0].plot(t,path,color="blue",alpha=i*1/len(paths_t))
-axs[0,0].plot(ts,-0.5*g*ts**2+qdot0*ts+q0,color="black",linestyle="--")
+#axs[0,0].plot(ts,-0.5*g*ts**2+qdot0*ts+q0,color="black",linestyle="--")
 
 axs[0,1].set_title("velocity")
 for i,(t,path) in enumerate(zip(paths_t,paths_qdot)):
     axs[0,1].plot(t,path,color="green",alpha=i*1/len(paths_t))
-axs[0,1].plot(ts,-g*ts+qdot0,color="black",linestyle="--")
+#axs[0,1].plot(ts,-g*ts+qdot0,color="black",linestyle="--")
 
 axs[0,2].set_title("Lagrangian")
 for i,(t,path) in enumerate(zip(paths_t,paths_L)):
     axs[0,2].plot(t,path,color="red",alpha=i*1/len(paths_t))
-axs[0,2].plot(ts,m*g**2*ts**2+m*qdot0**2/2,color="black",linestyle="--")
+#axs[0,2].plot(ts,m*g**2*ts**2+m*qdot0**2/2,color="black",linestyle="--")
 
 axs[1,0].set_title("NN q")
 axs[1,1].set_title("NN qdot")
-axs[1,2].set_title("training loss")
+axs[1,2].set_title("action (training loss)")
 
 for i,(t,path) in enumerate(zip(paths_t,paths_NNq)):
     axs[1,0].plot(t,path,color="purple",alpha=i*1/len(paths_t))
