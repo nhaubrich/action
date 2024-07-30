@@ -11,7 +11,7 @@ class NeuralNetwork(nn.Module):
         #self.tf=tf
         #self.q0=q0
         #self.qdot0=qdot0
-        N = 256
+        N = 16
         self.stack = nn.Sequential(
                 nn.Linear(1,N),
                 nn.ReLU(),
@@ -52,7 +52,6 @@ NNqdot0 = NNqdot[0]
 q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
 qdot = NNqdot-NNqdot0+qdot0
 
-action = Lagrangian(q,qdot,m,g).sum()/(tf-t0)
 print("q0 {}, qdot0 {}".format(q[0],qdot[0]))
 
 
@@ -70,14 +69,15 @@ paths_L = []
 paths_NNq = []
 paths_NNqdot = []
 
-epochs=1000
+epochs=2000
+Npoints=2**8
 NN.train()
 for i in range(epochs):
     #pdb.set_trace()
     #timesteps = torch.linspace(t0,tf,steps=1023).reshape(-1,1)
     
     timesteps = torch.cat([torch.tensor(t0,dtype=torch.float).reshape(-1,1),
-        torch.FloatTensor(1023,1).uniform_(t0,tf)])
+        torch.FloatTensor(Npoints-1,1).uniform_(t0,tf)])
     timesteps.requires_grad = True
     
     NNq = NN(timesteps)
@@ -101,7 +101,7 @@ for i in range(epochs):
     optimizer.step()
     optimizer.zero_grad()
 
-    print("{:.2f}".format(loss.item()))
+    print("{:.4f}".format(loss.item()))
     losses.append(loss.item())
 
     if i%(epochs//10)==0 or i+1==epochs:
