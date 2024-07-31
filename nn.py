@@ -22,9 +22,15 @@ class NeuralNetwork(nn.Module):
         self.stack = nn.Sequential(
                 nn.Linear(1,N),
                 nn.ReLU(),
+                #IReLU(),
                 nn.Linear(N,N),
                 nn.ReLU(),
-                nn.Linear(N,1,)
+                #IReLU(),
+                nn.Linear(N,N//2),
+                IReLU(),
+                nn.Linear(N//2,N//4),
+                IReLU(),
+                nn.Linear(N//4,1,)
         )
 
     def forward(self,x):
@@ -39,7 +45,6 @@ t0=0
 tf=5
 q0=0
 qf=-8
-
 #qdot0=0
 m=2
 g=10
@@ -70,7 +75,7 @@ print("q0 {}, qf {}".format(q[0],q[-1]))
 #1. generate points
 #2. compute action
 #3. backprop
-optimizer = torch.optim.Adam(NN.parameters(),lr=1e-4)
+optimizer = torch.optim.Adam(NN.parameters(),lr=1e-5)
 losses = []
 
 paths_t = []
@@ -80,8 +85,8 @@ paths_L = []
 paths_NNq = []
 paths_NNqdot = []
 
-epochs=800
-Npoints=2**8
+epochs=1600
+Npoints=2**12
 NN.train()
 for i in range(epochs):
     #pdb.set_trace()
@@ -110,13 +115,12 @@ for i in range(epochs):
     action = L.mean()/(tf-t0)
     loss = action 
 
-    #DEBUG loss = torch.sum((NNq-timesteps**2)**2)
-
     loss.backward()
     optimizer.step()
     optimizer.zero_grad()
-
-    print("{:.4f}".format(loss.item()))
+    
+    if i%100==0:
+        print("{:.4f}".format(loss.item()))
     losses.append(loss.item())
 
     if i%(epochs//10)==0 or i+1==epochs:
@@ -138,7 +142,7 @@ for i in range(epochs):
 #eval
 
 #NN.eval()
-timesteps = torch.linspace(t0,tf,steps=1024).reshape(-1,1)
+timesteps = torch.linspace(t0,tf,steps=256).reshape(-1,1)
 timesteps.requires_grad = True
 
 NNq = NN(timesteps)
@@ -167,13 +171,18 @@ fig, axs = plt.subplots(2,3)
 
 axs[0,0].set_title("position")
 for i,(t,path) in enumerate(zip(paths_t,paths_q)):
-    axs[0,0].plot(t,path,color="blue",alpha=i*1/len(paths_t))
+    axs[0,0].plot(t,path,color="blue",alpha=(i*1/len(paths_t))**2)
 #axs[0,0].plot(ts,-0.5*g*ts**2+qdot0*ts+q0,color="black",linestyle="--")
+axs[0,0].plot(ts,-0.5*g*ts**2+23.4*ts+q0,color="black",linestyle="--")
 
 axs[0,1].set_title("velocity")
 for i,(t,path) in enumerate(zip(paths_t,paths_qdot)):
     axs[0,1].plot(t,path,color="green",alpha=i*1/len(paths_t))
 #axs[0,1].plot(ts,-g*ts+qdot0,color="black",linestyle="--")
+axs[0,1].plot(ts,-g*ts+32.4,color="black",linestyle="--")
+#integrate velocity
+print("integrated velocity: {:.3f}".format(sum(paths_qdot[-1])*(tf-t0)/len(paths_qdot[-1])))
+
 
 axs[0,2].set_title("Lagrangian")
 for i,(t,path) in enumerate(zip(paths_t,paths_L)):
