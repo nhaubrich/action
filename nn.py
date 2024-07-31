@@ -5,6 +5,11 @@ from torch import nn
 import matplotlib.pyplot as plt
 import pdb
 
+#TODO
+#Learning rate scheduler
+#Find good number of points
+#Improve derivate stability (split layers in half for ReLU/IReLU?)
+
 class IReLU(nn.Module):
     def __init__(self):
         super().__init__()
@@ -22,14 +27,12 @@ class NeuralNetwork(nn.Module):
         self.stack = nn.Sequential(
                 nn.Linear(1,N),
                 nn.ReLU(),
-                #IReLU(),
                 nn.Linear(N,N),
                 nn.ReLU(),
-                #IReLU(),
                 nn.Linear(N,N//2),
                 IReLU(),
                 nn.Linear(N//2,N//4),
-                IReLU(),
+                nn.ReLU(),
                 nn.Linear(N//4,1,)
         )
 
@@ -75,7 +78,8 @@ print("q0 {}, qf {}".format(q[0],q[-1]))
 #1. generate points
 #2. compute action
 #3. backprop
-optimizer = torch.optim.Adam(NN.parameters(),lr=1e-5)
+optimizer = torch.optim.Adam(NN.parameters(),lr=10)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=400, threshold=0.0001, threshold_mode='abs',eps=1e-15,cooldown=400)
 losses = []
 
 paths_t = []
@@ -85,16 +89,19 @@ paths_L = []
 paths_NNq = []
 paths_NNqdot = []
 
-epochs=1600
-Npoints=2**12
+epochs=5000
+Npoints=2**5
 NN.train()
 for i in range(epochs):
     #pdb.set_trace()
-    #timesteps = torch.linspace(t0,tf,steps=1023).reshape(-1,1)
+    timesteps = torch.linspace(t0,tf,steps=Npoints).reshape(-1,1)
+
+    #this is unstable
+    #timesteps = torch.cat([torch.tensor(t0,dtype=torch.float).reshape(-1,1),
+    #    torch.FloatTensor(Npoints-2,1).uniform_(t0,tf),
+    #    torch.tensor(tf,dtype=torch.float).reshape(-1,1)])
     
-    timesteps = torch.cat([torch.tensor(t0,dtype=torch.float).reshape(-1,1),
-        torch.FloatTensor(Npoints-2,1).uniform_(t0,tf),
-        torch.tensor(tf,dtype=torch.float).reshape(-1,1)])
+    timesteps.sort() #for trap
     timesteps.requires_grad = True
     
     NNq = NN(timesteps)
@@ -112,15 +119,16 @@ for i in range(epochs):
     #qdot = NNqdot-NNqdot0+qdot0
     
     L = Lagrangian(q,qdot,m,g)
-    action = L.mean()/(tf-t0)
+    action = torch.trapezoid(L,x=timesteps,dim=0)
     loss = action 
 
     loss.backward()
     optimizer.step()
+    scheduler.step(loss)
     optimizer.zero_grad()
     
     if i%100==0:
-        print("{:.4f}".format(loss.item()))
+        print("action {:.4f}, lr {:.2E}".format(loss.item(),scheduler._last_lr[0]))
     losses.append(loss.item())
 
     if i%(epochs//10)==0 or i+1==epochs:
@@ -160,7 +168,8 @@ qdot = NNqdot*(qf-q0)/(NNqf-NNq0)
 
 
 L = Lagrangian(q,qdot,m,g)
-action = L.mean()/(tf-t0)
+#action = L.mean()/(tf-t0)
+action = torch.trapezoid(L,x=timesteps,dim=0)
 #print("q0 {}, qdot0 {}".format(q[0],qdot[0]))
 
 ts = timesteps.detach().numpy()
@@ -181,7 +190,8 @@ for i,(t,path) in enumerate(zip(paths_t,paths_qdot)):
 #axs[0,1].plot(ts,-g*ts+qdot0,color="black",linestyle="--")
 axs[0,1].plot(ts,-g*ts+32.4,color="black",linestyle="--")
 #integrate velocity
-print("integrated velocity: {:.3f}".format(sum(paths_qdot[-1])*(tf-t0)/len(paths_qdot[-1])))
+print("integrated velocity: {:.3f}".format(torch.trapezoid(torch.tensor(paths_qdot[-1]),x=torch.tensor(paths_t[-1]))))
+
 
 
 axs[0,2].set_title("Lagrangian")
