@@ -6,9 +6,9 @@ import matplotlib.pyplot as plt
 import pdb
 
 #TODO
-#Learning rate scheduler
 #Find good number of points
-#Improve derivate stability (split layers in half for ReLU/IReLU?)
+#Improve derivate stability
+#split layers in half for ReLU/IReLU?
 
 class IReLU(nn.Module):
     def __init__(self):
@@ -23,17 +23,17 @@ class NeuralNetwork(nn.Module):
         #self.tf=tf
         #self.q0=q0
         #self.qdot0=qdot0
-        N = 64
+        N = 16
         self.stack = nn.Sequential(
                 nn.Linear(1,N),
                 nn.ReLU(),
                 nn.Linear(N,N),
                 nn.ReLU(),
-                nn.Linear(N,N//2),
-                IReLU(),
-                nn.Linear(N//2,N//4),
-                nn.ReLU(),
-                nn.Linear(N//4,1,)
+                #nn.Linear(N,N//2),
+                #IReLU(),
+                #nn.Linear(N//2,N//4),
+                #nn.ReLU(),
+                nn.Linear(N//1,1,)
         )
 
     def forward(self,x):
@@ -78,7 +78,7 @@ print("q0 {}, qf {}".format(q[0],q[-1]))
 #1. generate points
 #2. compute action
 #3. backprop
-optimizer = torch.optim.Adam(NN.parameters(),lr=10)
+optimizer = torch.optim.Adam(NN.parameters(),lr=1e-1)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=400, threshold=0.0001, threshold_mode='abs',eps=1e-15,cooldown=400)
 losses = []
 
@@ -89,19 +89,19 @@ paths_L = []
 paths_NNq = []
 paths_NNqdot = []
 
-epochs=5000
-Npoints=2**5
+epochs=2000
+Npoints=2**8
 NN.train()
 for i in range(epochs):
     #pdb.set_trace()
-    timesteps = torch.linspace(t0,tf,steps=Npoints).reshape(-1,1)
-
-    #this is unstable
-    #timesteps = torch.cat([torch.tensor(t0,dtype=torch.float).reshape(-1,1),
-    #    torch.FloatTensor(Npoints-2,1).uniform_(t0,tf),
-    #    torch.tensor(tf,dtype=torch.float).reshape(-1,1)])
+    #timesteps = torch.linspace(t0,tf,steps=Npoints).reshape(-1,1)
     
-    timesteps.sort() #for trap
+    #avoid sorting by linear spacing + gaussian noise
+    timesteps = torch.cat([torch.tensor(t0,dtype=torch.float).reshape(-1,1),
+        torch.FloatTensor(Npoints-2,1).uniform_(t0,tf),
+        torch.tensor(tf,dtype=torch.float).reshape(-1,1)])
+    
+    timesteps = timesteps.sort(dim=0)[0] #sorted for trap rule
     timesteps.requires_grad = True
     
     NNq = NN(timesteps)
@@ -120,15 +120,18 @@ for i in range(epochs):
     
     L = Lagrangian(q,qdot,m,g)
     action = torch.trapezoid(L,x=timesteps,dim=0)
-    loss = action 
+    BCloss = 0.1*(torch.abs(NNqf-qf)+torch.abs(NNq0-q0)) 
+    loss =  action + BCloss #((NNqf-NNq0)**2>(qf-q0)**2)*(NNqf-NNq0)**2 
 
     loss.backward()
     optimizer.step()
     scheduler.step(loss)
     optimizer.zero_grad()
     
-    if i%100==0:
-        print("action {:.4f}, lr {:.2E}".format(loss.item(),scheduler._last_lr[0]))
+    if i%10==0:
+        print("action {:.4f}, BC {:.4f}, lr {:.2E}".format(loss.item(),BCloss.item(),scheduler._last_lr[0]))
+        #print("action {:.4f}, lr {:.2E}".format(loss.item(),scheduler._last_lr[0]))
+        #print(NNq0.item(),NNqf.item(),(NNqf-NNq0).item())
     losses.append(loss.item())
 
     if i%(epochs//10)==0 or i+1==epochs:
