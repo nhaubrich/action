@@ -65,9 +65,9 @@ NN = NeuralNetwork()
 
 
 t0=0
-tf=2
+tf=3
 q0=0
-qf=-60
+qf=-5
 #qdot0=0
 m=2
 g=10
@@ -97,7 +97,7 @@ paths_L = []
 paths_NNq = []
 paths_NNqdot = []
 
-epochs=50000
+epochs=1500
 Npoints=2**10
 NN.train()
 try:
@@ -135,8 +135,6 @@ try:
         sigH = torch.std(H)
         loss =  action #+sigH
 
-
-        y=-g*timesteps+v0
         #loss = torch.sum((qdot-y)**2)
         #loss = torch.sum((NNqdot-y)**2)
 
@@ -175,41 +173,46 @@ except KeyboardInterrupt:
 #eval
 
 fig, axs = plt.subplots(2,3)
-cmap = sns.color_palette("ch:s=.25,rot=-.25", as_cmap=True)
 axs[0,0].set_title("position")
 for i,(t,path) in enumerate(zip(paths_t,paths_q)):
-    axs[0,0].plot(t,path,color="blue",alpha=(i*1/len(paths_t))**1)
-    #axs[0,0].plot(t,path,color=cmap( int(256*(i/len(paths_t))) ) )
-#axs[0,0].plot(ts,-0.5*g*ts**2+qdot0*ts+q0,color="black",linestyle="--")
+    #axs[0,0].plot(t,path,color="blue",alpha=(i/len(paths_t))**2)
+    axs[0,0].plot(t,path,color="blue",alpha=0.1)
 
-v0=(qf-q0)/(tf-t0)+g/2*(tf-t0)
-axs[0,0].plot(t,[-0.5*g*ts**2+v0*ts+q0 for ts in t],color="black",linestyle="--")
+axs[0,0].plot(t,path,color="blue",alpha=1)
+
+axs[0,0].plot(t,[-0.5*g*ts**2+v0*ts+q0 for ts in t],color="black",linestyle=(0,(5, 10)))
 
 
+power=2
 axs[0,1].set_title("velocity")
 for i,(t,path) in enumerate(zip(paths_t,paths_qdot)):
-    if i+1==len(paths_t):
-        axs[0,1].plot(t,path,color="green",alpha=i*1/len(paths_t))
-#axs[0,1].plot(ts,-g*ts+qdot0,color="black",linestyle="--")
-axs[0,1].plot(t,[-g*ts+v0 for ts in t],color="black",linestyle="--")
-#integrate velocity
+    axs[0,1].plot(t,path,color="green",alpha=0.1)
+
+axs[0,1].plot(t,path,color="green",alpha=1)
+axs[0,1].plot(t,[-g*ts+v0 for ts in t],color="black",linestyle=(0,(5, 10)))
+
+#check: integrate velocity
 print("integrated velocity: {:.3f}".format(torch.trapezoid(torch.tensor(paths_qdot[-1]),x=torch.tensor(paths_t[-1]))))
 
 
 axs[0,2].set_title("Lagrangian")
 for i,(t,path) in enumerate(zip(paths_t,paths_L)):
-    axs[0,2].plot(t,path,color="red",alpha=i*1/len(paths_t))
-#axs[0,2].plot(ts,m*g**2*ts**2+m*qdot0**2/2,color="black",linestyle="--")
+    #axs[0,2].plot(t,path,color="red",alpha=(i/len(paths_t))**power)
+    axs[0,2].plot(t,path,color="red",alpha=0.1)
+axs[0,2].plot(t,path,color="red",alpha=1)
+axs[0,2].plot(t,[m*(g*ts)**2+m/2*v0**2-2*m*v0*g*ts-m*g*q0 for ts in t],color="black",linestyle=(0,(5, 10)))
 
 axs[1,0].set_title("NN q")
 axs[1,1].set_title("NN qdot")
 axs[1,2].set_title("action (training loss)")
 
 for i,(t,path) in enumerate(zip(paths_t,paths_NNq)):
-    axs[1,0].plot(t,path,color="purple",alpha=i*1/len(paths_t))
+    axs[1,0].plot(t,path,color="purple",alpha=0.1)
+axs[1,0].plot(t,path,color="purple",alpha=1)
 
 for i,(t,path) in enumerate(zip(paths_t,paths_NNqdot)):
-    axs[1,1].plot(t,path,color="orange",alpha=i*1/len(paths_t))
+    axs[1,1].plot(t,path,color="orange",alpha=0.1)
+axs[1,1].plot(t,path,color="orange",alpha=1)
 
 axs[1,2].plot(losses)
 fig.tight_layout()
