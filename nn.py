@@ -53,21 +53,15 @@ class NeuralNetwork(nn.Module):
 
     def forward(self,x):
         return self.stack(x)
-        #x = self.basestack(x)
-        #x_relu, x_irelu = x.split(self.N//2,dim=1)
-        #x_relu = self.relu(x_relu)
-        #x_irelu = self.irelu(x_irelu)
-        #x = self.final(torch.cat([x_relu,x_irelu],dim=1)) 
-        #return x
 
 
 NN = NeuralNetwork()
 
 
 t0=0
-tf=3
+tf=2
 q0=0
-qf=-5
+qf=0
 #qdot0=0
 m=2
 g=10
@@ -82,10 +76,7 @@ def Hamiltonian(q,qdot,m,g):
     return 1/2*m*qdot**2 + m*g*q
     #return 1/2*m*qdot**2 + 1/2*m**q**2
 
-#training loop
-#1. generate points
-#2. compute action
-#3. backprop
+#training 
 optimizer = torch.optim.Adam(NN.parameters(),lr=1e-2)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=4000, threshold=0.0001, threshold_mode='abs',eps=1e-15,cooldown=100)
 losses = []
@@ -97,62 +88,61 @@ paths_L = []
 paths_NNq = []
 paths_NNqdot = []
 
-epochs=1500
+epochs=2000
 Npoints=2**10
 NN.train()
 try:
     for i in range(epochs):
-        #timesteps = torch.linspace(t0,tf,steps=Npoints).reshape(-1,1)
-        
-        #avoid sorting by linear spacing + gaussian noise
+        #avoid sorting by linear spacing + gaussian noise?
+        #timesteps = torch.linspace(t0,tf,Npoints).reshape(-1,1)
+
         timesteps = torch.cat([torch.tensor(t0,dtype=torch.float).reshape(-1,1),
             torch.FloatTensor(Npoints-2,1).uniform_(t0,tf),
             torch.tensor(tf,dtype=torch.float).reshape(-1,1)])
-        
         timesteps = timesteps.sort(dim=0)[0] #sorted for trap rule
-        timesteps.requires_grad = True
+        
+        #timesteps.requires_grad = True
         
         NNqdot = NN(timesteps)
         NNq = torch.cat([ torch.zeros((1,1)),  torch.cumulative_trapezoid(NNqdot,x=timesteps,dim=0) ])
-        #NN(timesteps).backward(gradient=torch.ones(timesteps.shape))
-        #NNqdot = timesteps.grad
 
         NNq0 = NNq[0]
         NNqf = NNq[-1]
         #NNqdot0 = NNqdot[0]
         optimizer.zero_grad()
-
-        q = (NNq-NNq0)*(qf-q0)/(NNqf-NNq0)+q0
-        qdot = NNqdot*(qf-q0)/(NNqf-NNq0)
-        #q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
-        #qdot = NNqdot-NNqdot0+qdot0
         
+        C = ((qf-q0) - (NNqf-NNq0))/(tf-t0)
+
+        #IC: add constant to NNqdot to match avg displacement
+        qdot = NNqdot+C
+        q = NNq+(C*timesteps-C*timesteps[0])#+q0
+
+
         L = Lagrangian(q,qdot,m,g)
         H = Hamiltonian(q,qdot,m,g)
 
         action = torch.trapezoid(L,x=timesteps,dim=0)
         BCloss = (torch.abs(NNqf-qf)+torch.abs(NNq0-q0)) 
         sigH = torch.std(H)
-        loss =  action #+sigH
-
-        #loss = torch.sum((qdot-y)**2)
-        #loss = torch.sum((NNqdot-y)**2)
-
+        loss =  action  #torch.dist(torch.abs(NNqf-NNq0),torch.tensor([1.0]))
+        
         loss.backward()
+
+        torch.nn.utils.clip_grad_norm(NN.parameters(),0.01)
+
         optimizer.step()
         scheduler.step(loss)
         optimizer.zero_grad()
         
         if i%1==0:
-            print("{}\taction {:.4f}, sig(H) {:.4f}, lr {:.2E}".format(i,loss.item(),sigH.item(),scheduler._last_lr[0]))
-            #print("action {:.4f}, lr {:.2E}".format(loss.item(),scheduler._last_lr[0]))
-            #print(NNq0.item(),NNqf.item(),(NNqf-NNq0).item())
+            print("{}\taction {:.4f},  lr {:.2E}".format(i,loss.item(),scheduler._last_lr[0]))
             
 
         losses.append(loss.item())
 
         #if i%(epochs//100)==0 or i+1==epochs:
         if (i%(100)==0 and i!=0) or i+1==epochs:
+        #if  i+1==epochs or loss.item()>1e5:
             saved_t = timesteps.T.tolist()[0]
             saved_q = q.T.tolist()[0]
             saved_qdot = qdot.T.tolist()[0]
@@ -170,8 +160,9 @@ try:
             
 except KeyboardInterrupt:
     pass
-#eval
 
+print("C: {:.3f}, D: {:.3f}".format(C.item(),q0))
+#eval
 fig, axs = plt.subplots(2,3)
 axs[0,0].set_title("position")
 for i,(t,path) in enumerate(zip(paths_t,paths_q)):
@@ -179,8 +170,8 @@ for i,(t,path) in enumerate(zip(paths_t,paths_q)):
     axs[0,0].plot(t,path,color="blue",alpha=0.1)
 
 axs[0,0].plot(t,path,color="blue",alpha=1)
-
 axs[0,0].plot(t,[-0.5*g*ts**2+v0*ts+q0 for ts in t],color="black",linestyle=(0,(5, 10)))
+
 
 
 power=2
