@@ -2,6 +2,7 @@ import torch
 from torch import nn
 
 #torch.manual_seed(0)
+import seaborn as sns
 import matplotlib.pyplot as plt
 import pdb
 
@@ -19,7 +20,7 @@ class IReLU(nn.Module):
 class NeuralNetwork(nn.Module):
     def __init__(self):#,t0,tf,q0,qdot0):
         super().__init__()
-        N = 16
+        N = 64
         self.N = N
         self.stack = nn.Sequential(
                 nn.Linear(1,N),
@@ -30,7 +31,7 @@ class NeuralNetwork(nn.Module):
                 #IReLU(),
                 #nn.Linear(N//2,N//4),
                 #nn.ReLU(),
-                nn.Linear(N//1,1,)
+                nn.Linear(N//1,1)
         )
         #doesn't seem better. hybrid relu, x:x for 0-1, then x^2/2 above?
         self.basestack = nn.Sequential(
@@ -64,24 +65,29 @@ NN = NeuralNetwork()
 
 
 t0=0
-tf=5
+tf=2
 q0=0
-qf=-8
+qf=-60
 #qdot0=0
 m=2
 g=10
 
-
+v0=(qf-q0)/(tf-t0)+g/2*(tf-t0)
+print("v0",v0)
 def Lagrangian(q,qdot,m,g):
     return 1/2*m*qdot**2 - m*g*q
+    #return 1/2*m*qdot**2 - 1/2*m*q**2
 
+def Hamiltonian(q,qdot,m,g):
+    return 1/2*m*qdot**2 + m*g*q
+    #return 1/2*m*qdot**2 + 1/2*m**q**2
 
 #training loop
 #1. generate points
 #2. compute action
 #3. backprop
 optimizer = torch.optim.Adam(NN.parameters(),lr=1e-2)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=400, threshold=0.0001, threshold_mode='abs',eps=1e-15,cooldown=100)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=4000, threshold=0.0001, threshold_mode='abs',eps=1e-15,cooldown=100)
 losses = []
 
 paths_t = []
@@ -91,111 +97,103 @@ paths_L = []
 paths_NNq = []
 paths_NNqdot = []
 
-epochs=500
+epochs=50000
 Npoints=2**10
 NN.train()
-for i in range(epochs):
-    #timesteps = torch.linspace(t0,tf,steps=Npoints).reshape(-1,1)
-    
-    #avoid sorting by linear spacing + gaussian noise
-    timesteps = torch.cat([torch.tensor(t0,dtype=torch.float).reshape(-1,1),
-        torch.FloatTensor(Npoints-2,1).uniform_(t0,tf),
-        torch.tensor(tf,dtype=torch.float).reshape(-1,1)])
-    
-    timesteps = timesteps.sort(dim=0)[0] #sorted for trap rule
-    timesteps.requires_grad = True
-    
-    NNq = NN(timesteps)
-    NN(timesteps).backward(gradient=torch.ones(timesteps.shape))
-    NNqdot = timesteps.grad
+try:
+    for i in range(epochs):
+        #timesteps = torch.linspace(t0,tf,steps=Npoints).reshape(-1,1)
+        
+        #avoid sorting by linear spacing + gaussian noise
+        timesteps = torch.cat([torch.tensor(t0,dtype=torch.float).reshape(-1,1),
+            torch.FloatTensor(Npoints-2,1).uniform_(t0,tf),
+            torch.tensor(tf,dtype=torch.float).reshape(-1,1)])
+        
+        timesteps = timesteps.sort(dim=0)[0] #sorted for trap rule
+        timesteps.requires_grad = True
+        
+        NNqdot = NN(timesteps)
+        NNq = torch.cat([ torch.zeros((1,1)),  torch.cumulative_trapezoid(NNqdot,x=timesteps,dim=0) ])
+        #NN(timesteps).backward(gradient=torch.ones(timesteps.shape))
+        #NNqdot = timesteps.grad
 
-    NNq0 = NNq[0]
-    NNqf = NNq[-1]
-    #NNqdot0 = NNqdot[0]
-    optimizer.zero_grad()
+        NNq0 = NNq[0]
+        NNqf = NNq[-1]
+        #NNqdot0 = NNqdot[0]
+        optimizer.zero_grad()
 
-    q = (NNq-NNq0)*(qf-q0)/(NNqf-NNq0)+q0
-    qdot = NNqdot*(qf-q0)/(NNqf-NNq0)
-    #q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
-    #qdot = NNqdot-NNqdot0+qdot0
-    
-    L = Lagrangian(q,qdot,m,g)
-    action = torch.trapezoid(L,x=timesteps,dim=0)
-    BCloss = (torch.abs(NNqf-qf)+torch.abs(NNq0-q0)) 
-    loss =  action #+ BCloss #((NNqf-NNq0)**2>(qf-q0)**2)*(NNqf-NNq0)**2 
+        q = (NNq-NNq0)*(qf-q0)/(NNqf-NNq0)+q0
+        qdot = NNqdot*(qf-q0)/(NNqf-NNq0)
+        #q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
+        #qdot = NNqdot-NNqdot0+qdot0
+        
+        L = Lagrangian(q,qdot,m,g)
+        H = Hamiltonian(q,qdot,m,g)
 
-    loss.backward()
-    optimizer.step()
-    scheduler.step(loss)
-    optimizer.zero_grad()
-    
-    if i%10==0:
-        print("action {:.4f}, BC {:.4f}, lr {:.2E}".format(loss.item(),BCloss.item(),scheduler._last_lr[0]))
-        #print("action {:.4f}, lr {:.2E}".format(loss.item(),scheduler._last_lr[0]))
-        #print(NNq0.item(),NNqf.item(),(NNqf-NNq0).item())
-    losses.append(loss.item())
+        action = torch.trapezoid(L,x=timesteps,dim=0)
+        BCloss = (torch.abs(NNqf-qf)+torch.abs(NNq0-q0)) 
+        sigH = torch.std(H)
+        loss =  action #+sigH
 
-    if i%(epochs//10)==0 or i+1==epochs:
-        saved_t = timesteps.T.tolist()[0]
-        saved_q = q.T.tolist()[0]
-        saved_qdot = qdot.T.tolist()[0]
-        saved_L = L.T.tolist()[0]
-        saved_NNq = NNq.T.tolist()[0]
-        saved_NNqdot = NNqdot.T.tolist()[0]
 
-        saved_t,saved_q,saved_qdot,saved_L,saved_NNq,saved_NNqdot = zip(*sorted(zip(saved_t,saved_q,saved_qdot,saved_L,saved_NNq,saved_NNqdot)))
-        paths_t.append(saved_t)
-        paths_q.append(saved_q)
-        paths_qdot.append(saved_qdot)
-        paths_L.append(saved_L)
-        paths_NNq.append(saved_NNq)
-        paths_NNqdot.append(saved_NNqdot)
+        y=-g*timesteps+v0
+        #loss = torch.sum((qdot-y)**2)
+        #loss = torch.sum((NNqdot-y)**2)
 
+        loss.backward()
+        optimizer.step()
+        scheduler.step(loss)
+        optimizer.zero_grad()
+        
+        if i%1==0:
+            print("{}\taction {:.4f}, sig(H) {:.4f}, lr {:.2E}".format(i,loss.item(),sigH.item(),scheduler._last_lr[0]))
+            #print("action {:.4f}, lr {:.2E}".format(loss.item(),scheduler._last_lr[0]))
+            #print(NNq0.item(),NNqf.item(),(NNqf-NNq0).item())
+            
+
+        losses.append(loss.item())
+
+        #if i%(epochs//100)==0 or i+1==epochs:
+        if (i%(100)==0 and i!=0) or i+1==epochs:
+            saved_t = timesteps.T.tolist()[0]
+            saved_q = q.T.tolist()[0]
+            saved_qdot = qdot.T.tolist()[0]
+            saved_L = L.T.tolist()[0]
+            saved_NNq = NNq.T.tolist()[0]
+            saved_NNqdot = NNqdot.T.tolist()[0]
+
+            saved_t,saved_q,saved_qdot,saved_L,saved_NNq,saved_NNqdot = zip(*sorted(zip(saved_t,saved_q,saved_qdot,saved_L,saved_NNq,saved_NNqdot)))
+            paths_t.append(saved_t)
+            paths_q.append(saved_q)
+            paths_qdot.append(saved_qdot)
+            paths_L.append(saved_L)
+            paths_NNq.append(saved_NNq)
+            paths_NNqdot.append(saved_NNqdot)
+            
+except KeyboardInterrupt:
+    pass
 #eval
 
-#NN.eval()
-timesteps = torch.linspace(t0,tf,steps=256).reshape(-1,1)
-timesteps.requires_grad = True
-
-NNq = NN(timesteps)
-NN(timesteps).backward(gradient=torch.ones(timesteps.shape))
-NNqdot = timesteps.grad
-
-NNq0 = NNq[0]
-NNqf = NNq[-1]
-#NNqdot0 = NNqdot[0]
-
-#q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
-#qdot = NNqdot-NNqdot0+qdot0
-q = (NNq-NNq0)*(qf-q0)/(NNqf-NNq0)+q0
-qdot = NNqdot*(qf-q0)/(NNqf-NNq0)
-
-
-L = Lagrangian(q,qdot,m,g)
-#action = L.mean()/(tf-t0)
-action = torch.trapezoid(L,x=timesteps,dim=0)
-#print("q0 {}, qdot0 {}".format(q[0],qdot[0]))
-
-ts = timesteps.detach().numpy()
-pos = q.detach().numpy()
-vel = qdot.detach().numpy()
-
 fig, axs = plt.subplots(2,3)
-
+cmap = sns.color_palette("ch:s=.25,rot=-.25", as_cmap=True)
 axs[0,0].set_title("position")
 for i,(t,path) in enumerate(zip(paths_t,paths_q)):
-    axs[0,0].plot(t,path,color="blue",alpha=(i*1/len(paths_t))**2)
+    axs[0,0].plot(t,path,color="blue",alpha=(i*1/len(paths_t))**1)
+    #axs[0,0].plot(t,path,color=cmap( int(256*(i/len(paths_t))) ) )
 #axs[0,0].plot(ts,-0.5*g*ts**2+qdot0*ts+q0,color="black",linestyle="--")
-axs[0,0].plot(ts,-0.5*g*ts**2+23.4*ts+q0,color="black",linestyle="--")
+
+v0=(qf-q0)/(tf-t0)+g/2*(tf-t0)
+axs[0,0].plot(t,[-0.5*g*ts**2+v0*ts+q0 for ts in t],color="black",linestyle="--")
+
 
 axs[0,1].set_title("velocity")
 for i,(t,path) in enumerate(zip(paths_t,paths_qdot)):
-    axs[0,1].plot(t,path,color="green",alpha=i*1/len(paths_t))
+    if i+1==len(paths_t):
+        axs[0,1].plot(t,path,color="green",alpha=i*1/len(paths_t))
 #axs[0,1].plot(ts,-g*ts+qdot0,color="black",linestyle="--")
-axs[0,1].plot(ts,-g*ts+32.4,color="black",linestyle="--")
+axs[0,1].plot(t,[-g*ts+v0 for ts in t],color="black",linestyle="--")
 #integrate velocity
 print("integrated velocity: {:.3f}".format(torch.trapezoid(torch.tensor(paths_qdot[-1]),x=torch.tensor(paths_t[-1]))))
-
 
 
 axs[0,2].set_title("Lagrangian")
@@ -213,8 +211,6 @@ for i,(t,path) in enumerate(zip(paths_t,paths_NNq)):
 for i,(t,path) in enumerate(zip(paths_t,paths_NNqdot)):
     axs[1,1].plot(t,path,color="orange",alpha=i*1/len(paths_t))
 
-#axs[1,0].plot(t,NNq.detach().numpy())
-#axs[1,1].plot(t,NNqdot.detach().numpy())
 axs[1,2].plot(losses)
 fig.tight_layout()
 plt.show()
