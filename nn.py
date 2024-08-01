@@ -19,11 +19,8 @@ class IReLU(nn.Module):
 class NeuralNetwork(nn.Module):
     def __init__(self):#,t0,tf,q0,qdot0):
         super().__init__()
-        #self.t0=t0
-        #self.tf=tf
-        #self.q0=q0
-        #self.qdot0=qdot0
         N = 16
+        self.N = N
         self.stack = nn.Sequential(
                 nn.Linear(1,N),
                 nn.ReLU(),
@@ -35,10 +32,32 @@ class NeuralNetwork(nn.Module):
                 #nn.ReLU(),
                 nn.Linear(N//1,1,)
         )
+        #doesn't seem better. hybrid relu, x:x for 0-1, then x^2/2 above?
+        self.basestack = nn.Sequential(
+                nn.Linear(1,N)
+        )
+        self.relu = nn.Sequential(
+                nn.ReLU(),
+                nn.Linear(N//2,N//2),
+                IReLU(),
+        )
+        self.irelu = nn.Sequential(
+                IReLU(),
+                nn.Linear(N//2,N//2),
+                nn.ReLU(),
+        )
+        self.final = nn.Sequential(
+                nn.Linear(N,1)
+        )
 
     def forward(self,x):
-        return self.stack(x)#-self.stack(torch.zeros(1))
-
+        return self.stack(x)
+        #x = self.basestack(x)
+        #x_relu, x_irelu = x.split(self.N//2,dim=1)
+        #x_relu = self.relu(x_relu)
+        #x_irelu = self.irelu(x_irelu)
+        #x = self.final(torch.cat([x_relu,x_irelu],dim=1)) 
+        #return x
 
 
 NN = NeuralNetwork()
@@ -56,30 +75,13 @@ g=10
 def Lagrangian(q,qdot,m,g):
     return 1/2*m*qdot**2 - m*g*q
 
-timesteps = torch.linspace(t0,tf,steps=11).reshape(-1,1)
-timesteps.requires_grad = True
-NNq = NN(timesteps)
-NN(timesteps).backward(gradient=torch.ones(timesteps.shape))
-NNqdot = timesteps.grad
-
-#enforce I.C.
-NNq0 = NNq[0]
-NNqdot0 = NNqdot[0]
-NNqf = NNq[-1]
-#q = NNq-NNq0+q0 + (-NNqdot0+qdot0)*timesteps
-#qdot = NNqdot-NNqdot0+qdot0
-q = (NNq-NNq0)*(qf-q0)/(NNqf-NNq0)+q0
-qdot = NNqdot*(qf-q0)/(NNqf-NNq0)
-
-
-print("q0 {}, qf {}".format(q[0],q[-1]))
 
 #training loop
 #1. generate points
 #2. compute action
 #3. backprop
-optimizer = torch.optim.Adam(NN.parameters(),lr=1e-1)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=400, threshold=0.0001, threshold_mode='abs',eps=1e-15,cooldown=400)
+optimizer = torch.optim.Adam(NN.parameters(),lr=1e-2)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=400, threshold=0.0001, threshold_mode='abs',eps=1e-15,cooldown=100)
 losses = []
 
 paths_t = []
@@ -89,11 +91,10 @@ paths_L = []
 paths_NNq = []
 paths_NNqdot = []
 
-epochs=2000
-Npoints=2**8
+epochs=500
+Npoints=2**10
 NN.train()
 for i in range(epochs):
-    #pdb.set_trace()
     #timesteps = torch.linspace(t0,tf,steps=Npoints).reshape(-1,1)
     
     #avoid sorting by linear spacing + gaussian noise
@@ -120,8 +121,8 @@ for i in range(epochs):
     
     L = Lagrangian(q,qdot,m,g)
     action = torch.trapezoid(L,x=timesteps,dim=0)
-    BCloss = 0.1*(torch.abs(NNqf-qf)+torch.abs(NNq0-q0)) 
-    loss =  action + BCloss #((NNqf-NNq0)**2>(qf-q0)**2)*(NNqf-NNq0)**2 
+    BCloss = (torch.abs(NNqf-qf)+torch.abs(NNq0-q0)) 
+    loss =  action #+ BCloss #((NNqf-NNq0)**2>(qf-q0)**2)*(NNqf-NNq0)**2 
 
     loss.backward()
     optimizer.step()
